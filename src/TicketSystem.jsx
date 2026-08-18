@@ -23,6 +23,10 @@ import {
   Loader2,
   Bell,
   History,
+  KeyRound,
+  Copy,
+  Check,
+  LogOut,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -334,7 +338,7 @@ function NotificationBell({ notifications, onOpenTicket, onMarkAllRead }) {
         <>
           {/* Overlay para fechar ao clicar fora */}
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-lg z-50 overflow-hidden">
+          <div className="absolute right-0 mt-2 w-[min(20rem,calc(100vw-2rem))] bg-white rounded-2xl border border-slate-200 shadow-lg z-50 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
               <p className="text-sm font-semibold text-slate-800">
                 Notificações
@@ -490,24 +494,6 @@ function LoginScreen({ mode, onModeChange }) {
     // componente raiz assume a partir daqui e mostra o dashboard.
   };
 
-  const handleRequestReset = async (e) => {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-      email.trim(),
-      { redirectTo: window.location.origin }
-    );
-    setLoading(false);
-    if (resetError) {
-      setError(resetError.message);
-      return;
-    }
-    setInfo(
-      "Se esse e-mail estiver cadastrado, enviamos um link para você definir sua senha. Confira sua caixa de entrada."
-    );
-  };
-
   const handleSetPassword = async (e) => {
     e.preventDefault();
     setError("");
@@ -598,17 +584,10 @@ function LoginScreen({ mode, onModeChange }) {
                 {loading && <Loader2 size={14} className="animate-spin" />}
                 Entrar
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setError("");
-                  setInfo("");
-                  onModeChange("reset-request");
-                }}
-                className="w-full text-center text-xs link-brand transition"
-              >
-                Primeiro acesso ou esqueci minha senha
-              </button>
+              <p className="w-full text-center text-xs text-slate-400">
+                Esqueceu sua senha? Peça a um gestor para gerar uma nova em{" "}
+                <span className="font-medium text-slate-500">Equipe</span>.
+              </p>
               <div className="pt-2 border-t border-slate-100 text-center">
                 <button
                   type="button"
@@ -714,61 +693,6 @@ function LoginScreen({ mode, onModeChange }) {
             </form>
           )}
 
-          {mode === "reset-request" && (
-            <form onSubmit={handleRequestReset} className="space-y-4">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-800 mb-1">
-                  Definir senha
-                </h2>
-                <p className="text-xs text-slate-400 mb-4">
-                  Informe seu e-mail corporativo. Enviaremos um link para
-                  você criar (ou redefinir) sua senha.
-                </p>
-                <label className="block text-xs font-medium text-slate-600 mb-1.5">
-                  E-mail corporativo
-                </label>
-                <input
-                  type="email"
-                  required
-                  autoFocus
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="nome.sobrenome@grupof5.com.br"
-                  className={inputBase}
-                />
-              </div>
-              {error && (
-                <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-                  {error}
-                </p>
-              )}
-              {info && (
-                <p className="text-xs text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
-                  {info}
-                </p>
-              )}
-              <button
-                type="submit"
-                disabled={loading}
-                className="btn-brand w-full rounded-lg px-4 py-2.5 text-sm font-medium text-white transition shadow-sm flex items-center justify-center gap-2"
-              >
-                {loading && <Loader2 size={14} className="animate-spin" />}
-                Enviar link de acesso
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setError("");
-                  setInfo("");
-                  onModeChange("login");
-                }}
-                className="w-full text-center text-xs text-slate-400 hover:text-slate-600 transition"
-              >
-                Voltar para o login
-              </button>
-            </form>
-          )}
-
           {mode === "set-password" && (
             <form onSubmit={handleSetPassword} className="space-y-4">
               <div>
@@ -828,6 +752,122 @@ function LoginScreen({ mode, onModeChange }) {
 // COMPONENTE: NOVO TICKET (MODAL)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// COMPONENTE: ALTERAR SENHA (autoatendimento, qualquer usuário logado)
+// ---------------------------------------------------------------------------
+// Chama supabase.auth.updateUser diretamente — como a pessoa já está
+// autenticada (sessão válida), ela pode trocar a própria senha sem
+// precisar da senha antiga nem de nenhum e-mail. Principal uso: quem
+// recebeu uma senha temporária de um gestor troca por uma senha própria
+// assim que entra.
+
+function ChangePasswordModal({ onClose }) {
+  const [senha, setSenha] = useState("");
+  const [confirmSenha, setConfirmSenha] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const inputBase =
+    "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus-brand transition";
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (senha.length < 6) {
+      setError("A senha precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (senha !== confirmSenha) {
+      setError("As senhas não coincidem.");
+      return;
+    }
+    setLoading(true);
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: senha,
+    });
+    setLoading(false);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    setSuccess(true);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl border border-slate-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-slate-900">
+            Alterar senha
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg p-1.5 transition"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {success ? (
+          <div className="text-center py-3">
+            <p className="text-sm text-emerald-600 mb-4">
+              Senha alterada com sucesso!
+            </p>
+            <button
+              onClick={onClose}
+              className="btn-brand rounded-lg px-4 py-2 text-sm font-medium text-white transition shadow-sm"
+            >
+              Fechar
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                Nova senha
+              </label>
+              <input
+                type="password"
+                required
+                autoFocus
+                value={senha}
+                onChange={(e) => setSenha(e.target.value)}
+                placeholder="Mínimo de 6 caracteres"
+                className={`${inputBase} mb-3`}
+              />
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                Confirmar senha
+              </label>
+              <input
+                type="password"
+                required
+                value={confirmSenha}
+                onChange={(e) => setConfirmSenha(e.target.value)}
+                placeholder="Repita a senha"
+                className={inputBase}
+              />
+            </div>
+            {error && (
+              <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                {error}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-brand w-full rounded-lg px-4 py-2 text-sm font-medium text-white transition shadow-sm flex items-center justify-center gap-2"
+            >
+              {loading && <Loader2 size={14} className="animate-spin" />}
+              Salvar nova senha
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function NewTicketModal({ onClose, onCreate, currentUser }) {
   const [form, setForm] = useState({
     codigo: "",
@@ -876,7 +916,7 @@ function NewTicketModal({ onClose, onCreate, currentUser }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
       <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-xl border border-slate-200">
-        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 sticky top-0 bg-white rounded-t-2xl">
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 sm:px-6 py-4 sticky top-0 bg-white rounded-t-2xl">
           <div className="flex items-center gap-2">
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center"
@@ -896,8 +936,8 @@ function NewTicketModal({ onClose, onCreate, currentUser }) {
           </button>
         </div>
 
-        <div className="px-6 py-5 space-y-5">
-          <div className="grid grid-cols-2 gap-4">
+        <div className="px-4 sm:px-6 py-5 space-y-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1.5">
                 Código do Ticket (Casa Magalhães) *
@@ -932,7 +972,7 @@ function NewTicketModal({ onClose, onCreate, currentUser }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1.5">
                 CNPJ do Cliente *
@@ -1033,7 +1073,7 @@ function NewTicketModal({ onClose, onCreate, currentUser }) {
           )}
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-slate-100 px-6 py-4 sticky bottom-0 bg-white rounded-b-2xl">
+        <div className="flex justify-end gap-3 border-t border-slate-100 px-4 sm:px-6 py-4 sticky bottom-0 bg-white rounded-b-2xl">
           <button
             onClick={onClose}
             disabled={saving}
@@ -1109,7 +1149,7 @@ function TicketDetail({
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-6 py-6">
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
       <button
         onClick={onBack}
         className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-800 transition mb-5"
@@ -1125,10 +1165,10 @@ function TicketDetail({
       )}
 
       {/* Cabeçalho */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-6">
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 mb-6">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <div className="flex items-center gap-2 text-slate-400 text-xs font-medium mb-2">
+            <div className="flex items-center gap-2 text-slate-400 text-xs font-medium mb-2 flex-wrap">
               <Hash size={13} />
               {ticket.codigo}
               <span className="text-slate-300">•</span>
@@ -1139,7 +1179,7 @@ function TicketDetail({
               <Building2 size={20} style={{ color: BRAND.green }} />
               {ticket.cliente}
             </h1>
-            <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
+            <div className="flex items-center gap-4 mt-2 text-xs text-slate-500 flex-wrap">
               <span>CNPJ: {ticket.cnpj}</span>
               <span className="text-slate-300">•</span>
               <span>Cód. AG: {ticket.codigoAG}</span>
@@ -1174,10 +1214,10 @@ function TicketDetail({
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Coluna principal */}
-        <div className="col-span-2 space-y-6">
-          <div className="bg-white rounded-2xl border border-slate-200 p-6">
+        <div className="lg:col-span-2 space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-3">
               <FileText size={16} className="text-slate-400" />
               Relato do Problema
@@ -1187,7 +1227,7 @@ function TicketDetail({
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200 p-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-4">
               <MessageSquare size={16} className="text-slate-400" />
               Atualizações / Comentários
@@ -1251,7 +1291,7 @@ function TicketDetail({
 
         {/* Painel lateral */}
         <div className="space-y-6">
-          <div className="bg-white rounded-2xl border border-slate-200 p-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
                 <Users size={16} className="text-slate-400" />
@@ -1348,7 +1388,7 @@ function TicketDetail({
             )}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200 p-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6">
             <h3 className="text-sm font-semibold text-slate-800 mb-3">
               Informações do Ticket
             </h3>
@@ -1382,7 +1422,7 @@ function TicketDetail({
             </dl>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200 p-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-4">
               <History size={16} className="text-slate-400" />
               Histórico de Status
@@ -1435,53 +1475,30 @@ function TicketDetail({
 }
 
 // ---------------------------------------------------------------------------
-// COMPONENTE: DASHBOARD
-// ---------------------------------------------------------------------------
-
 // ---------------------------------------------------------------------------
 // COMPONENTE: EQUIPE (somente gestor)
 // ---------------------------------------------------------------------------
-// Convites de verdade exigem a service role key do Supabase (privilégio
-// administrativo), que NUNCA pode rodar no navegador. Por isso o convite
-// aqui chama uma Edge Function ("invite-technician") que roda no servidor
-// do Supabase: ela confere se quem está chamando é gestor e só então usa
-// a service role key, internamente, para criar o convite de verdade.
+// O convite por e-mail foi descontinuado (dependia de SMTP customizado,
+// não configurado). Os técnicos entram pela tela "Criar conta" (login),
+// com autocadastro restrito a e-mails @grupof5.com.br.
+//
+// A redefinição de senha aqui também não depende de e-mail: chama a
+// Edge Function "reset-user-password", que confere no servidor se quem
+// está chamando é gestor e, se for, gera uma senha temporária e já a
+// aplica na conta da pessoa via privilégio administrativo (nunca exposto
+// ao navegador). O gestor repassa essa senha por um canal interno
+// (WhatsApp, Slack etc.) — a pessoa pode trocá-la depois em "Alterar
+// senha", no cabeçalho, assim que entrar.
 
-function TeamView({ users, currentUser, onInvite, onChangeRole }) {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState("tecnico");
-  const [inviting, setInviting] = useState(false);
-  const [inviteError, setInviteError] = useState("");
-  const [inviteSuccess, setInviteSuccess] = useState("");
-
+function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
   const [roleBusyId, setRoleBusyId] = useState(null);
   const [roleError, setRoleError] = useState("");
 
-  const inputBase =
-    "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus-brand transition";
-
-  const handleInvite = async (e) => {
-    e.preventDefault();
-    setInviteError("");
-    setInviteSuccess("");
-    if (!name.trim() || !email.trim()) {
-      setInviteError("Preencha nome e e-mail.");
-      return;
-    }
-    setInviting(true);
-    try {
-      await onInvite({ name: name.trim(), email: email.trim(), role });
-      setInviteSuccess(`Convite enviado para ${email.trim()}.`);
-      setName("");
-      setEmail("");
-      setRole("tecnico");
-    } catch (err) {
-      setInviteError(err.message || "Não foi possível enviar o convite.");
-    } finally {
-      setInviting(false);
-    }
-  };
+  const [resetTarget, setResetTarget] = useState(null);
+  const [resetBusyId, setResetBusyId] = useState(null);
+  const [resetError, setResetError] = useState("");
+  const [resetResult, setResetResult] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const handleRoleChange = async (userId, newRole) => {
     setRoleError("");
@@ -1495,106 +1512,96 @@ function TeamView({ users, currentUser, onInvite, onChangeRole }) {
     }
   };
 
+  const handleResetPassword = async (user) => {
+    setResetError("");
+    setResetBusyId(user.id);
+    try {
+      const tempPassword = await onResetPassword(user.id);
+      setResetResult({ userId: user.id, name: user.name, tempPassword });
+      setResetTarget(null);
+      setCopied(false);
+    } catch (err) {
+      setResetError(err.message || "Não foi possível redefinir a senha.");
+    } finally {
+      setResetBusyId(null);
+    }
+  };
+
+  const handleCopy = () => {
+    if (!resetResult) return;
+    navigator.clipboard?.writeText(resetResult.tempPassword);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
-    <div className="max-w-4xl mx-auto px-6 py-6">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-slate-900">Equipe</h1>
         <p className="text-sm text-slate-500 mt-0.5">
-          Convide técnicos e gerencie papéis de acesso
+          Gerencie papéis de acesso e redefina senhas
         </p>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-6">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-4">
-          <UserPlus size={16} className="text-slate-400" />
-          Convidar técnico
-        </h2>
-        <form
-          onSubmit={handleInvite}
-          className="grid grid-cols-1 sm:grid-cols-[1.2fr_1.6fr_1fr_auto] gap-3 items-end"
-        >
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1.5">
-              Nome
-            </label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Nome completo"
-              className={inputBase}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1.5">
-              E-mail corporativo
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="nome.sobrenome@grupof5.com.br"
-              className={inputBase}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1.5">
-              Papel
-            </label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className={`${inputBase} bg-white`}
+      {resetResult && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 sm:px-5 py-4 mb-6">
+          <p className="text-xs font-semibold text-amber-800 mb-2">
+            Nova senha temporária para {resetResult.name}
+          </p>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <code className="flex-1 bg-white border border-amber-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-800 tracking-wide break-all">
+              {resetResult.tempPassword}
+            </code>
+            <button
+              onClick={handleCopy}
+              className="shrink-0 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium text-amber-700 hover:bg-amber-100 transition flex items-center justify-center gap-1.5"
             >
-              <option value="tecnico">Técnico</option>
-              <option value="gestor">Gestor</option>
-            </select>
+              {copied ? <Check size={13} /> : <Copy size={13} />}
+              {copied ? "Copiado" : "Copiar"}
+            </button>
           </div>
+          <p className="text-[11px] text-amber-700 mt-2.5 leading-relaxed">
+            Copie agora e envie com segurança para {resetResult.name} por um
+            canal interno (WhatsApp, Slack etc.) — essa senha não fica salva
+            em lugar nenhum e não aparece de novo. Oriente a pessoa a trocar
+            por uma senha própria em "Alterar senha", no cabeçalho, assim que
+            entrar.
+          </p>
           <button
-            type="submit"
-            disabled={inviting}
-            className="btn-brand rounded-lg px-4 py-2 text-sm font-medium text-white transition shadow-sm flex items-center justify-center gap-2 h-9.5"
+            onClick={() => setResetResult(null)}
+            className="text-[11px] text-amber-600 hover:text-amber-800 underline mt-2 transition"
           >
-            {inviting && <Loader2 size={14} className="animate-spin" />}
-            Convidar
+            Fechar
           </button>
-        </form>
-        {inviteError && (
-          <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2 mt-3">
-            {inviteError}
-          </p>
-        )}
-        {inviteSuccess && (
-          <p className="text-xs text-emerald-600 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 mt-3">
-            {inviteSuccess}
-          </p>
-        )}
-        <p className="text-[11px] text-slate-400 mt-3">
-          A pessoa recebe um e-mail para criar a própria senha e já entra
-          direto no sistema com o papel selecionado acima.
-        </p>
-      </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-100">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-100">
           <h2 className="text-sm font-semibold text-slate-800">
             Membros ({users.length})
           </h2>
         </div>
         {roleError && (
-          <p className="text-xs text-red-500 bg-red-50 border-b border-red-100 px-6 py-2">
+          <p className="text-xs text-red-500 bg-red-50 border-b border-red-100 px-4 sm:px-6 py-2">
             {roleError}
+          </p>
+        )}
+        {resetError && (
+          <p className="text-xs text-red-500 bg-red-50 border-b border-red-100 px-4 sm:px-6 py-2">
+            {resetError}
           </p>
         )}
         <div className="divide-y divide-slate-50">
           {users.map((u) => (
             <div
               key={u.id}
-              className="flex items-center justify-between px-6 py-3"
+              className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3"
             >
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <Avatar member={u} size="md" />
-                <div>
-                  <p className="text-sm font-medium text-slate-800">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-800 truncate">
                     {u.name}
                     {u.id === currentUser.id && (
                       <span className="text-slate-400 font-normal">
@@ -1603,18 +1610,56 @@ function TeamView({ users, currentUser, onInvite, onChangeRole }) {
                       </span>
                     )}
                   </p>
-                  <p className="text-xs text-slate-400">{u.email}</p>
+                  <p className="text-xs text-slate-400 truncate">
+                    {u.email}
+                  </p>
                 </div>
               </div>
-              <select
-                value={u.role}
-                disabled={roleBusyId === u.id}
-                onChange={(e) => handleRoleChange(u.id, e.target.value)}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium focus-brand bg-white disabled:opacity-50"
-              >
-                <option value="tecnico">Técnico</option>
-                <option value="gestor">Gestor</option>
-              </select>
+
+              <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                {resetTarget === u.id ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-slate-500">
+                      Gerar nova senha?
+                    </span>
+                    <button
+                      onClick={() => handleResetPassword(u)}
+                      disabled={resetBusyId === u.id}
+                      className="text-xs font-semibold text-red-600 hover:text-red-700 transition disabled:opacity-50"
+                    >
+                      {resetBusyId === u.id ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        "Sim"
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setResetTarget(null)}
+                      className="text-xs text-slate-400 hover:text-slate-600 transition"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setResetTarget(u.id)}
+                    title="Gerar nova senha temporária"
+                    className="text-slate-400 icon-brand-hover rounded-lg p-1.5 transition"
+                  >
+                    <KeyRound size={15} />
+                  </button>
+                )}
+
+                <select
+                  value={u.role}
+                  disabled={roleBusyId === u.id}
+                  onChange={(e) => handleRoleChange(u.id, e.target.value)}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium focus-brand bg-white disabled:opacity-50"
+                >
+                  <option value="tecnico">Técnico</option>
+                  <option value="gestor">Gestor</option>
+                </select>
+              </div>
             </div>
           ))}
         </div>
@@ -1650,8 +1695,8 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
   });
 
   return (
-    <div className="max-w-6xl mx-auto px-6 py-6">
-      <div className="flex items-center justify-between mb-6">
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
           <h1 className="text-xl font-semibold text-slate-900">
             Dashboard Operacional
@@ -1662,7 +1707,7 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
         </div>
         <button
           onClick={onNewTicket}
-          className="btn-brand inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white transition shadow-sm"
+          className="btn-brand inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white transition shadow-sm w-full sm:w-auto"
         >
           <Plus size={16} />
           Novo Ticket
@@ -1670,7 +1715,7 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
       </div>
 
       {/* Cards de resumo */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-start justify-between">
           <div>
             <p className="text-xs font-medium text-slate-500 mb-1">
@@ -1731,7 +1776,7 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
       </div>
 
       {/* Busca e filtros */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-4 flex items-center gap-3">
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
         <div className="relative flex-1">
           <Search
             size={16}
@@ -1747,7 +1792,7 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 focus-brand bg-white"
+          className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 focus-brand bg-white w-full sm:w-auto"
         >
           <option value="Todos">Todos os status</option>
           {STATUS_OPTIONS.map((s) => (
@@ -1758,85 +1803,139 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
         </select>
       </div>
 
-      {/* Tabela */}
+      {/* Tabela (telas médias/grandes) */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-100 bg-slate-50/50 text-left">
-              <th className="px-5 py-3 font-medium text-slate-500 text-xs">
-                Código
-              </th>
-              <th className="px-5 py-3 font-medium text-slate-500 text-xs">
-                Cliente
-              </th>
-              <th className="px-5 py-3 font-medium text-slate-500 text-xs">
-                CNPJ
-              </th>
-              <th className="px-5 py-3 font-medium text-slate-500 text-xs">
-                Status
-              </th>
-              <th className="px-5 py-3 font-medium text-slate-500 text-xs">
-                Responsáveis
-              </th>
-              <th className="px-5 py-3 font-medium text-slate-500 text-xs">
-                Abertura
-              </th>
-              <th className="px-5 py-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((t) => {
-              const assigned = users.filter((m) =>
-                t.responsaveis.includes(m.id)
-              );
-              return (
-                <tr
-                  key={t.id}
-                  onClick={() => onOpenTicket(t)}
-                  className="border-b border-slate-50 last:border-0 hover:bg-slate-50 cursor-pointer transition"
-                >
-                  <td className="px-5 py-3.5 font-medium text-slate-800">
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 bg-slate-50/50 text-left">
+                <th className="px-5 py-3 font-medium text-slate-500 text-xs">
+                  Código
+                </th>
+                <th className="px-5 py-3 font-medium text-slate-500 text-xs">
+                  Cliente
+                </th>
+                <th className="px-5 py-3 font-medium text-slate-500 text-xs">
+                  CNPJ
+                </th>
+                <th className="px-5 py-3 font-medium text-slate-500 text-xs">
+                  Status
+                </th>
+                <th className="px-5 py-3 font-medium text-slate-500 text-xs">
+                  Responsáveis
+                </th>
+                <th className="px-5 py-3 font-medium text-slate-500 text-xs">
+                  Abertura
+                </th>
+                <th className="px-5 py-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((t) => {
+                const assigned = users.filter((m) =>
+                  t.responsaveis.includes(m.id)
+                );
+                return (
+                  <tr
+                    key={t.id}
+                    onClick={() => onOpenTicket(t)}
+                    className="border-b border-slate-50 last:border-0 hover:bg-slate-50 cursor-pointer transition"
+                  >
+                    <td className="px-5 py-3.5 font-medium text-slate-800">
+                      {t.codigo}
+                    </td>
+                    <td className="px-5 py-3.5 text-slate-600">
+                      {t.cliente}
+                    </td>
+                    <td className="px-5 py-3.5 text-slate-500">{t.cnpj}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-1.5">
+                        <StatusBadge status={t.status} />
+                        <SlaBadge ticket={t} />
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5">
+                      {assigned.length === 0 ? (
+                        <span className="text-xs text-slate-300">
+                          Não atribuído
+                        </span>
+                      ) : (
+                        <div className="flex -space-x-2">
+                          {assigned.map((m) => (
+                            <Avatar key={m.id} member={m} />
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 text-slate-500">
+                      {formatDateBR(t.dataAbertura)}
+                    </td>
+                    <td className="px-5 py-3.5 text-slate-300">
+                      <ChevronRight size={16} />
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="px-5 py-10 text-center text-slate-400 text-sm"
+                  >
+                    Nenhum ticket encontrado para os filtros aplicados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Lista em cards (mobile) — a tabela não cabe bem em telas
+            estreitas, então essa é a versão equivalente pra celular. */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {filtered.map((t) => {
+            const assigned = users.filter((m) =>
+              t.responsaveis.includes(m.id)
+            );
+            return (
+              <button
+                key={t.id}
+                onClick={() => onOpenTicket(t)}
+                className="w-full text-left px-4 py-3.5 hover:bg-slate-50 active:bg-slate-100 transition"
+              >
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <span className="text-sm font-medium text-slate-800">
                     {t.codigo}
-                  </td>
-                  <td className="px-5 py-3.5 text-slate-600">{t.cliente}</td>
-                  <td className="px-5 py-3.5 text-slate-500">{t.cnpj}</td>
-                  <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-1.5">
-                      <StatusBadge status={t.status} />
-                      <SlaBadge ticket={t} />
-                    </div>
-                  </td>
-                  <td className="px-5 py-3.5">
-                    {assigned.length === 0 ? (
-                      <span className="text-xs text-slate-300">
-                        Não atribuído
-                      </span>
-                    ) : (
+                  </span>
+                  <StatusBadge status={t.status} />
+                </div>
+                <p className="text-sm text-slate-600 truncate mb-2">
+                  {t.cliente}
+                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <SlaBadge ticket={t} />
+                    {assigned.length > 0 && (
                       <div className="flex -space-x-2">
                         {assigned.map((m) => (
                           <Avatar key={m.id} member={m} />
                         ))}
                       </div>
                     )}
-                  </td>
-                  <td className="px-5 py-3.5 text-slate-500">
+                  </div>
+                  <span className="text-xs text-slate-400 shrink-0">
                     {formatDateBR(t.dataAbertura)}
-                  </td>
-                  <td className="px-5 py-3.5 text-slate-300">
-                    <ChevronRight size={16} />
-                  </td>
-                </tr>
-              );
-            })}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-5 py-10 text-center text-slate-400 text-sm">
-                  Nenhum ticket encontrado para os filtros aplicados.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+          {filtered.length === 0 && (
+            <p className="px-4 py-10 text-center text-slate-400 text-sm">
+              Nenhum ticket encontrado para os filtros aplicados.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1849,7 +1948,7 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
 export default function TicketSystem() {
   // --- Sessão / autenticação -----------------------------------------
   const [session, setSession] = useState(undefined); // undefined = ainda checando
-  const [authMode, setAuthMode] = useState("login"); // login | reset-request | set-password
+  const [authMode, setAuthMode] = useState("login"); // login | signup | set-password
   const [currentUser, setCurrentUser] = useState(null); // linha da tabela profiles
 
   // --- Dados de negócio -------------------------------------------------
@@ -1862,6 +1961,7 @@ export default function TicketSystem() {
   const [view, setView] = useState("dashboard");
   const [selectedId, setSelectedId] = useState(null);
   const [showNewTicket, setShowNewTicket] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   const selectedTicket = tickets.find((t) => t.id === selectedId);
 
@@ -2110,15 +2210,14 @@ export default function TicketSystem() {
     }
   };
 
-  // Chama a Edge Function "invite-technician". A checagem de "só gestor
-  // pode convidar" acontece no servidor, não aqui — isto aqui só repassa
-  // o erro para a tela caso o servidor rejeite.
-  const inviteTechnician = async ({ name, email, role }) => {
+  // Chama a Edge Function "reset-user-password". A checagem de "só
+  // gestor pode redefinir a senha de outra pessoa" acontece no servidor,
+  // não aqui — isto aqui só repassa o erro caso o servidor rejeite, e
+  // devolve a senha temporária gerada para o gestor repassar à pessoa.
+  const resetUserPassword = async (userId) => {
     const { data, error } = await supabase.functions.invoke(
-      "invite-technician",
-      {
-        body: { name, email, role, redirectTo: window.location.origin },
-      }
+      "reset-user-password",
+      { body: { userId } }
     );
 
     if (error) {
@@ -2133,7 +2232,7 @@ export default function TicketSystem() {
     }
     if (data?.error) throw new Error(data.error);
 
-    await fetchUsers();
+    return data.tempPassword;
   };
 
   const changeUserRole = async (userId, newRole) => {
@@ -2169,55 +2268,58 @@ export default function TicketSystem() {
       <GlobalBrandStyles />
       {/* Topbar */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex flex-wrap items-center gap-x-4 gap-y-2.5">
+          <div className="flex items-center gap-2.5 sm:gap-3">
             <img
               src={F5_LOGO}
               alt="F5 Automação"
-              className="w-10 h-10 rounded-full object-cover shrink-0"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover shrink-0"
             />
-            <div>
-              <p className="text-sm font-semibold text-slate-900 leading-none">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-slate-900 leading-none truncate">
                 F5 Automação
               </p>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="hidden sm:block text-xs text-slate-400 mt-0.5">
                 Controle de Tickets de Suporte
               </p>
             </div>
+          </div>
 
-            <nav className="flex items-center gap-1 ml-4 pl-4 border-l border-slate-100">
+          {/* Nav: fica na mesma linha em telas largas; no mobile, quebra
+              para uma linha própria (order-3 + basis-full) para não
+              disputar espaço com o bloco de ações à direita. */}
+          <nav className="order-3 basis-full sm:order-0 sm:basis-auto flex items-center gap-1 sm:ml-2 sm:pl-4 sm:border-l sm:border-slate-100">
+            <button
+              onClick={() => setView("dashboard")}
+              className={`text-sm font-medium rounded-lg px-3 py-1.5 transition ${
+                view === "dashboard"
+                  ? "bg-slate-100 text-slate-800"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              Dashboard
+            </button>
+            {currentUser.role === "gestor" && (
               <button
-                onClick={() => setView("dashboard")}
+                onClick={() => setView("team")}
                 className={`text-sm font-medium rounded-lg px-3 py-1.5 transition ${
-                  view === "dashboard"
+                  view === "team"
                     ? "bg-slate-100 text-slate-800"
                     : "text-slate-500 hover:text-slate-800"
                 }`}
               >
-                Dashboard
+                Equipe
               </button>
-              {currentUser.role === "gestor" && (
-                <button
-                  onClick={() => setView("team")}
-                  className={`text-sm font-medium rounded-lg px-3 py-1.5 transition ${
-                    view === "team"
-                      ? "bg-slate-100 text-slate-800"
-                      : "text-slate-500 hover:text-slate-800"
-                  }`}
-                >
-                  Equipe
-                </button>
-              )}
-            </nav>
-          </div>
+            )}
+          </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 ml-auto">
             <NotificationBell
               notifications={notifications}
               onOpenTicket={openTicketFromNotification}
               onMarkAllRead={markAllNotificationsRead}
             />
-            <div className="flex items-center gap-2.5">
+            <div className="hidden md:flex items-center gap-2.5">
               <Avatar member={currentUser} size="md" />
               <div className="text-right leading-none">
                 <p className="text-sm font-medium text-slate-800">
@@ -2228,11 +2330,29 @@ export default function TicketSystem() {
                 </p>
               </div>
             </div>
+            <div className="md:hidden">
+              <Avatar member={currentUser} size="sm" />
+            </div>
+            <button
+              onClick={() => setShowChangePassword(true)}
+              title="Alterar senha"
+              className="text-slate-400 icon-brand-hover rounded-lg p-2 transition"
+            >
+              <KeyRound size={17} />
+            </button>
             <button
               onClick={handleLogout}
-              className="text-xs font-medium text-slate-400 hover:text-slate-700 border border-slate-200 rounded-lg px-3 py-1.5 transition"
+              title="Sair"
+              className="hidden sm:inline-flex text-xs font-medium text-slate-400 hover:text-slate-700 border border-slate-200 rounded-lg px-3 py-1.5 transition"
             >
               Sair
+            </button>
+            <button
+              onClick={handleLogout}
+              title="Sair"
+              className="sm:hidden text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg p-2 transition"
+            >
+              <LogOut size={17} />
             </button>
           </div>
         </div>
@@ -2267,8 +2387,8 @@ export default function TicketSystem() {
         <TeamView
           users={users}
           currentUser={currentUser}
-          onInvite={inviteTechnician}
           onChangeRole={changeUserRole}
+          onResetPassword={resetUserPassword}
         />
       )}
 
@@ -2278,6 +2398,10 @@ export default function TicketSystem() {
           onCreate={createTicket}
           currentUser={currentUser}
         />
+      )}
+
+      {showChangePassword && (
+        <ChangePasswordModal onClose={() => setShowChangePassword(false)} />
       )}
     </div>
   );

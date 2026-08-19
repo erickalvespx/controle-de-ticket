@@ -7,7 +7,6 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
-  Timer,
   Users,
   MessageSquare,
   Building2,
@@ -27,6 +26,9 @@ import {
   Copy,
   Check,
   LogOut,
+  ChevronUp,
+  ChevronDown,
+  Pencil,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -92,35 +94,27 @@ const ROLE_LABEL = {
   gestor: "Gestor",
 };
 
-const STATUS_OPTIONS = [
-  "Aberto",
-  "Em Atendimento",
-  "Pendente Casa Magalhães",
-  "Resolvido",
-];
-
-const STATUS_STYLES = {
-  Aberto: {
-    badge: "bg-blue-50 text-blue-700 border-blue-200",
-    dot: "bg-blue-500",
-    icon: AlertCircle,
-  },
-  "Em Atendimento": {
-    badge: "bg-amber-50 text-amber-700 border-amber-200",
-    dot: "bg-amber-500",
-    icon: Timer,
-  },
-  "Pendente Casa Magalhães": {
-    badge: "bg-purple-50 text-purple-700 border-purple-200",
-    dot: "bg-purple-500",
-    icon: Clock,
-  },
-  Resolvido: {
-    badge: "bg-teal-50 text-teal-700 border-teal-200",
-    dot: "bg-teal-500",
-    icon: CheckCircle2,
-  },
+// Paleta fixa de cores para os status. Precisa ser literal (não montada
+// via template string tipo `bg-${cor}-50`) porque o Tailwind só gera as
+// classes que consegue "ver" escritas por extenso no código-fonte — uma
+// classe montada dinamicamente em tempo de execução não é detectada no
+// build e simplesmente não funciona.
+const STATUS_COLOR_PRESETS = {
+  blue: { badge: "bg-blue-50 text-blue-700 border-blue-200", dot: "bg-blue-500" },
+  amber: { badge: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500" },
+  purple: { badge: "bg-purple-50 text-purple-700 border-purple-200", dot: "bg-purple-500" },
+  teal: { badge: "bg-teal-50 text-teal-700 border-teal-200", dot: "bg-teal-500" },
+  red: { badge: "bg-red-50 text-red-700 border-red-200", dot: "bg-red-500" },
+  green: { badge: "bg-green-50 text-green-700 border-green-200", dot: "bg-green-500" },
+  pink: { badge: "bg-pink-50 text-pink-700 border-pink-200", dot: "bg-pink-500" },
+  indigo: { badge: "bg-indigo-50 text-indigo-700 border-indigo-200", dot: "bg-indigo-500" },
+  slate: { badge: "bg-slate-100 text-slate-700 border-slate-300", dot: "bg-slate-500" },
 };
+const STATUS_COLOR_KEYS = Object.keys(STATUS_COLOR_PRESETS);
+
+function getStatusStyle(cor) {
+  return STATUS_COLOR_PRESETS[cor] || STATUS_COLOR_PRESETS.slate;
+}
 
 // Estas duas funções são só um "espelho" das regras que já existem de
 // verdade no Postgres (funções can_change_status / can_manage_assignment
@@ -170,8 +164,15 @@ function todayISO() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function isThisWeek(isoDate) {
-  const d = new Date(isoDate + "T00:00:00");
+// Aceita tanto datas puras "AAAA-MM-DD" (ex: data_abertura) quanto
+// timestamps ISO completos (ex: changed_at do histórico de status).
+// Para datas puras, força meia-noite local para não errar o limite da
+// semana por causa de fuso horário.
+function isThisWeek(dateInput) {
+  const d =
+    typeof dateInput === "string" && dateInput.length === 10
+      ? new Date(dateInput + "T00:00:00")
+      : new Date(dateInput);
   const now = new Date();
   const day = now.getDay() === 0 ? 7 : now.getDay();
   const monday = new Date(now);
@@ -180,20 +181,13 @@ function isThisWeek(isoDate) {
   return d >= monday && d <= now;
 }
 
-// SLA: depois de quantas horas/dias um ticket nesses status passa a ser
-// sinalizado como "atenção" (75% do prazo) ou "atrasado" (100%). Baseado
-// em ticket.historico (não em updated_at, que muda com qualquer edição).
-const SLA_ABERTO_HORAS = 24;
-const SLA_PENDENTE_CASA_MAGALHAES_HORAS = 3 * 24;
-
+// SLA: cada status carrega seu próprio limite em horas (campo sla_horas,
+// configurável pelo gestor na tela "Status"). null = esse status não é
+// monitorado por SLA. Baseado em ticket.historico (não em updated_at,
+// que muda com qualquer edição, não só troca de status).
 function getSlaInfo(ticket) {
-  const limiteHoras =
-    ticket.status === "Aberto"
-      ? SLA_ABERTO_HORAS
-      : ticket.status === "Pendente Casa Magalhães"
-      ? SLA_PENDENTE_CASA_MAGALHAES_HORAS
-      : null;
-  if (limiteHoras === null) return null;
+  const limiteHoras = ticket.status?.slaHoras;
+  if (!limiteHoras) return null;
 
   const ultimaEntrada =
     ticket.historico && ticket.historico.length > 0
@@ -210,6 +204,17 @@ function getSlaInfo(ticket) {
     return { nivel: "atencao", horas: horasDecorridas };
   }
   return null;
+}
+
+// Um ticket conta como "concluído esta semana" se o status ATUAL dele
+// estiver marcado como conta_como_resolvido E a transição mais recente
+// pra esse status tiver acontecido nesta semana — não a data de
+// abertura do ticket (que pode ser de qualquer época).
+function wasResolvedThisWeek(ticket) {
+  if (!ticket.status?.contaComoResolvido) return false;
+  const ultima = ticket.historico?.[ticket.historico.length - 1];
+  if (!ultima) return false;
+  return isThisWeek(ultima.changedAt);
 }
 
 function formatElapsedHours(horas) {
@@ -230,7 +235,15 @@ function mapTicketRow(row) {
     cliente: row.cliente,
     relato: row.relato,
     dataAbertura: row.data_abertura,
-    status: row.status,
+    status: row.status
+      ? {
+          id: row.status.id,
+          nome: row.status.nome,
+          cor: row.status.cor,
+          slaHoras: row.status.sla_horas,
+          contaComoResolvido: row.status.conta_como_resolvido,
+        }
+      : null,
     criadoPor: row.criado_por,
     responsaveis: (row.ticket_responsaveis || []).map((r) => r.profile_id),
     comentarios: (row.ticket_comentarios || [])
@@ -256,15 +269,26 @@ function mapTicketRow(row) {
   };
 }
 
+// status recebe o objeto embutido { nome, cor, ... } — não mais um nome
+// fixo de uma lista hardcoded, já que os status agora são gerenciáveis
+// pelo gestor. Por isso o badge usa um ponto colorido em vez de um ícone
+// específico por status (não dá pra prever/escolher um ícone lucide para
+// um status que o gestor acabou de inventar).
 function StatusBadge({ status }) {
-  const style = STATUS_STYLES[status];
-  const Icon = style.icon;
+  if (!status) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium bg-slate-50 text-slate-400 border-slate-200">
+        Sem status
+      </span>
+    );
+  }
+  const style = getStatusStyle(status.cor);
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${style.badge}`}
     >
-      <Icon size={12} strokeWidth={2.5} />
-      {status}
+      <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+      {status.nome}
     </span>
   );
 }
@@ -328,7 +352,7 @@ function NotificationBell({ notifications, onOpenTicket, onMarkAllRead }) {
       >
         <Bell size={18} />
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center leading-none">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center leading-none">
             {unreadCount > 9 ? "9+" : unreadCount}
           </span>
         )}
@@ -868,7 +892,10 @@ function ChangePasswordModal({ onClose }) {
   );
 }
 
-function NewTicketModal({ onClose, onCreate, currentUser }) {
+function NewTicketModal({ onClose, onCreate, currentUser, statuses }) {
+  const statusPadrao =
+    statuses.find((s) => s.isDefault) ?? statuses[0] ?? null;
+
   const [form, setForm] = useState({
     codigo: "",
     cnpj: "",
@@ -876,7 +903,7 @@ function NewTicketModal({ onClose, onCreate, currentUser }) {
     cliente: "",
     relato: "",
     dataAbertura: todayISO(),
-    status: "Aberto",
+    statusId: statusPadrao?.id ?? "",
   });
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
@@ -1042,13 +1069,13 @@ function NewTicketModal({ onClose, onCreate, currentUser }) {
               Status
             </label>
             <select
-              value={form.status}
-              onChange={(e) => update("status", e.target.value)}
+              value={form.statusId}
+              onChange={(e) => update("statusId", e.target.value)}
               className={`${inputBase} border-slate-200 bg-white`}
             >
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
+              {statuses.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.nome}
                 </option>
               ))}
             </select>
@@ -1102,6 +1129,7 @@ function NewTicketModal({ onClose, onCreate, currentUser }) {
 function TicketDetail({
   ticket,
   users,
+  statuses,
   currentUser,
   onBack,
   onChangeStatus,
@@ -1190,14 +1218,14 @@ function TicketDetail({
               <SlaBadge ticket={ticket} />
               {podeAlterarStatus ? (
                 <select
-                  value={ticket.status}
+                  value={ticket.status?.id ?? ""}
                   onChange={(e) => changeStatus(e.target.value)}
                   disabled={busy}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-medium focus-brand ${STATUS_STYLES[ticket.status].badge}`}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium focus-brand ${getStatusStyle(ticket.status?.cor).badge}`}
                 >
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
+                  {statuses.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.nome}
                     </option>
                   ))}
                 </select>
@@ -1668,23 +1696,468 @@ function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
   );
 }
 
-function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
+function ColorSwatchPicker({ value, onChange }) {
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      {STATUS_COLOR_KEYS.map((key) => {
+        const style = getStatusStyle(key);
+        const selected = value === key;
+        return (
+          <button
+            type="button"
+            key={key}
+            onClick={() => onChange(key)}
+            title={key}
+            className={`w-6 h-6 rounded-full ${style.dot} transition ${
+              selected
+                ? "ring-2 ring-offset-2 ring-slate-400"
+                : "hover:opacity-80"
+            }`}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// COMPONENTE: STATUS DOS TICKETS (somente gestor)
+// ---------------------------------------------------------------------------
+// CRUD completo de status. Regras de negócio garantidas no banco (não só
+// aqui): não dá pra excluir o único status restante, não dá pra excluir
+// o status marcado como padrão sem promover outro antes, e não dá pra
+// excluir um status que algum ticket esteja usando no momento (a UI
+// desabilita o botão preventivamente usando a contagem já carregada,
+// mas o banco também bloqueia via FK mesmo que alguém burle a tela).
+
+function StatusManagerView({ statuses, tickets, onCreate, onUpdate, onDelete, onReorder }) {
+  const [novoNome, setNovoNome] = useState("");
+  const [novaCor, setNovaCor] = useState(STATUS_COLOR_KEYS[0]);
+  const [novoSla, setNovoSla] = useState("");
+  const [novoContaResolvido, setNovoContaResolvido] = useState(false);
+  const [novoDefault, setNovoDefault] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
+
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [savingId, setSavingId] = useState(null);
+  const [editError, setEditError] = useState("");
+
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [reorderError, setReorderError] = useState("");
+
+  const inputBase =
+    "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus-brand transition";
+
+  const countByStatus = (id) =>
+    tickets.filter((t) => t.status?.id === id).length;
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    setCreateError("");
+    if (!novoNome.trim()) {
+      setCreateError("Informe um nome para o status.");
+      return;
+    }
+    setCreating(true);
+    try {
+      await onCreate({
+        nome: novoNome.trim(),
+        cor: novaCor,
+        slaHoras: novoSla ? Number(novoSla) : null,
+        contaComoResolvido: novoContaResolvido,
+        isDefault: novoDefault,
+      });
+      setNovoNome("");
+      setNovaCor(STATUS_COLOR_KEYS[0]);
+      setNovoSla("");
+      setNovoContaResolvido(false);
+      setNovoDefault(false);
+    } catch (err) {
+      setCreateError(err.message || "Não foi possível criar o status.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const startEdit = (s) => {
+    setEditingId(s.id);
+    setEditForm({
+      nome: s.nome,
+      cor: s.cor,
+      slaHoras: s.slaHoras ? String(s.slaHoras) : "",
+      contaComoResolvido: s.contaComoResolvido,
+      isDefault: s.isDefault,
+    });
+    setEditError("");
+  };
+
+  const handleSaveEdit = async (id) => {
+    setEditError("");
+    if (!editForm.nome.trim()) {
+      setEditError("O nome não pode ficar em branco.");
+      return;
+    }
+    setSavingId(id);
+    try {
+      await onUpdate(id, {
+        nome: editForm.nome.trim(),
+        cor: editForm.cor,
+        slaHoras: editForm.slaHoras ? Number(editForm.slaHoras) : null,
+        contaComoResolvido: editForm.contaComoResolvido,
+        isDefault: editForm.isDefault,
+      });
+      setEditingId(null);
+      setEditForm(null);
+    } catch (err) {
+      setEditError(err.message || "Não foi possível salvar as alterações.");
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleDelete = async (s) => {
+    setDeleteError("");
+    setDeletingId(s.id);
+    try {
+      await onDelete(s.id);
+      setDeleteTarget(null);
+    } catch (err) {
+      setDeleteError(err.message || "Não foi possível excluir este status.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleReorder = async (id, direction) => {
+    setReorderError("");
+    try {
+      await onReorder(id, direction);
+    } catch (err) {
+      setReorderError(err.message || "Não foi possível reordenar.");
+    }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-slate-900">
+          Status dos Tickets
+        </h1>
+        <p className="text-sm text-slate-500 mt-0.5">
+          Crie, edite, reordene ou remova os status usados no atendimento
+        </p>
+      </div>
+
+      {/* Novo status */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 mb-6">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-4">
+          <Plus size={16} className="text-slate-400" />
+          Novo status
+        </h2>
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                Nome
+              </label>
+              <input
+                value={novoNome}
+                onChange={(e) => setNovoNome(e.target.value)}
+                placeholder="Ex: Aguardando Peça"
+                className={inputBase}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">
+                SLA em horas (opcional)
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={novoSla}
+                onChange={(e) => setNovoSla(e.target.value)}
+                placeholder="Deixe em branco para não monitorar"
+                className={inputBase}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-2">
+              Cor
+            </label>
+            <ColorSwatchPicker value={novaCor} onChange={setNovaCor} />
+          </div>
+          <div className="flex items-center gap-5 flex-wrap">
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={novoContaResolvido}
+                onChange={(e) => setNovoContaResolvido(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Conta como "concluído" nas métricas
+            </label>
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={novoDefault}
+                onChange={(e) => setNovoDefault(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Status padrão para novos tickets
+            </label>
+          </div>
+          {createError && (
+            <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+              {createError}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={creating}
+            className="btn-brand rounded-lg px-4 py-2 text-sm font-medium text-white transition shadow-sm flex items-center gap-2"
+          >
+            {creating && <Loader2 size={14} className="animate-spin" />}
+            Criar status
+          </button>
+        </form>
+      </div>
+
+      {/* Lista */}
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-100">
+          <h2 className="text-sm font-semibold text-slate-800">
+            Status cadastrados ({statuses.length})
+          </h2>
+        </div>
+        {deleteError && (
+          <p className="text-xs text-red-500 bg-red-50 border-b border-red-100 px-4 sm:px-6 py-2">
+            {deleteError}
+          </p>
+        )}
+        {reorderError && (
+          <p className="text-xs text-red-500 bg-red-50 border-b border-red-100 px-4 sm:px-6 py-2">
+            {reorderError}
+          </p>
+        )}
+        <div className="divide-y divide-slate-50">
+          {statuses.map((s, index) => {
+            const count = countByStatus(s.id);
+            const isEditing = editingId === s.id;
+            const style = getStatusStyle(s.cor);
+
+            if (isEditing) {
+              return (
+                <div
+                  key={s.id}
+                  className="px-4 sm:px-6 py-4 space-y-3 bg-slate-50/50"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input
+                      value={editForm.nome}
+                      onChange={(e) =>
+                        setEditForm((f) => ({ ...f, nome: e.target.value }))
+                      }
+                      className={inputBase}
+                      placeholder="Nome"
+                    />
+                    <input
+                      type="number"
+                      min="1"
+                      value={editForm.slaHoras}
+                      onChange={(e) =>
+                        setEditForm((f) => ({
+                          ...f,
+                          slaHoras: e.target.value,
+                        }))
+                      }
+                      className={inputBase}
+                      placeholder="SLA em horas (opcional)"
+                    />
+                  </div>
+                  <ColorSwatchPicker
+                    value={editForm.cor}
+                    onChange={(cor) => setEditForm((f) => ({ ...f, cor }))}
+                  />
+                  <div className="flex items-center gap-5 flex-wrap">
+                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={editForm.contaComoResolvido}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            contaComoResolvido: e.target.checked,
+                          }))
+                        }
+                        className="rounded border-slate-300"
+                      />
+                      Conta como "concluído"
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={editForm.isDefault}
+                        onChange={(e) =>
+                          setEditForm((f) => ({
+                            ...f,
+                            isDefault: e.target.checked,
+                          }))
+                        }
+                        className="rounded border-slate-300"
+                      />
+                      Status padrão
+                    </label>
+                  </div>
+                  {editError && (
+                    <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                      {editError}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleSaveEdit(s.id)}
+                      disabled={savingId === s.id}
+                      className="btn-brand rounded-lg px-3 py-1.5 text-xs font-medium text-white transition flex items-center gap-1.5"
+                    >
+                      {savingId === s.id && (
+                        <Loader2 size={12} className="animate-spin" />
+                      )}
+                      Salvar
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingId(null);
+                        setEditForm(null);
+                        setEditError("");
+                      }}
+                      className="text-xs text-slate-400 hover:text-slate-600 transition px-2"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={s.id}
+                className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex flex-col gap-0.5 shrink-0">
+                    <button
+                      onClick={() => handleReorder(s.id, "up")}
+                      disabled={index === 0}
+                      className="text-slate-300 hover:text-slate-600 disabled:opacity-30 transition"
+                    >
+                      <ChevronUp size={13} />
+                    </button>
+                    <button
+                      onClick={() => handleReorder(s.id, "down")}
+                      disabled={index === statuses.length - 1}
+                      className="text-slate-300 hover:text-slate-600 disabled:opacity-30 transition"
+                    >
+                      <ChevronDown size={13} />
+                    </button>
+                  </div>
+                  <span
+                    className={`w-3 h-3 rounded-full shrink-0 ${style.dot}`}
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium text-slate-800">
+                        {s.nome}
+                      </p>
+                      {s.isDefault && (
+                        <span className="text-[10px] font-medium text-slate-500 bg-slate-100 rounded-full px-1.5 py-0.5">
+                          padrão
+                        </span>
+                      )}
+                      {s.contaComoResolvido && (
+                        <span className="text-[10px] font-medium text-teal-600 bg-teal-50 rounded-full px-1.5 py-0.5">
+                          conta como concluído
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {s.slaHoras ? `SLA: ${s.slaHoras}h` : "Sem SLA"} ·{" "}
+                      {count} ticket{count !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => startEdit(s)}
+                    title="Editar"
+                    className="text-slate-400 icon-brand-hover rounded-lg p-1.5 transition"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  {deleteTarget === s.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-slate-500">
+                        Excluir?
+                      </span>
+                      <button
+                        onClick={() => handleDelete(s)}
+                        disabled={deletingId === s.id}
+                        className="text-xs font-semibold text-red-600 hover:text-red-700 transition"
+                      >
+                        {deletingId === s.id ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          "Sim"
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setDeleteTarget(null)}
+                        className="text-xs text-slate-400 hover:text-slate-600 transition"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setDeleteTarget(s.id)}
+                      disabled={count > 0}
+                      title={
+                        count > 0
+                          ? `${count} ticket(s) usando este status — mova-os primeiro`
+                          : "Excluir"
+                      }
+                      className="text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg p-1.5 transition disabled:opacity-30 disabled:hover:text-slate-400 disabled:hover:bg-transparent"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({ tickets, users, statuses, onOpenTicket, onNewTicket }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Todos");
 
-  const abertos = tickets.filter((t) => t.status === "Aberto").length;
-  const pendentesCasaMagalhaes = tickets.filter(
-    (t) => t.status === "Pendente Casa Magalhães"
-  ).length;
-  const resolvidosSemana = tickets.filter(
-    (t) => t.status === "Resolvido" && isThisWeek(t.dataAbertura)
-  ).length;
   const foraDoSla = tickets.filter(
     (t) => getSlaInfo(t)?.nivel === "atrasado"
   ).length;
+  const concluidosSemana = tickets.filter(wasResolvedThisWeek).length;
 
   const filtered = tickets.filter((t) => {
-    const matchStatus = statusFilter === "Todos" || t.status === statusFilter;
+    const matchStatus =
+      statusFilter === "Todos" || t.status?.id === statusFilter;
     const q = search.trim().toLowerCase();
     const matchSearch =
       !q ||
@@ -1714,35 +2187,38 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
         </button>
       </div>
 
-      {/* Cards de resumo */}
+      {/* Cards de resumo — um por status cadastrado (se adapta
+          automaticamente quando o gestor adiciona/renomeia/remove um
+          status), mais dois cards fixos de acompanhamento geral. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-start justify-between">
-          <div>
-            <p className="text-xs font-medium text-slate-500 mb-1">
-              Tickets Abertos
-            </p>
-            <p className="text-2xl font-semibold text-slate-900">{abertos}</p>
-            <p className="text-xs text-slate-400 mt-1">Aguardando atendimento</p>
-          </div>
-          <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
-            <AlertCircle size={20} className="text-blue-600" />
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-start justify-between">
-          <div>
-            <p className="text-xs font-medium text-slate-500 mb-1">
-              Pendentes com Casa Magalhães
-            </p>
-            <p className="text-2xl font-semibold text-slate-900">
-              {pendentesCasaMagalhaes}
-            </p>
-            <p className="text-xs text-slate-400 mt-1">Aguardando a Casa Magalhães</p>
-          </div>
-          <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center">
-            <Clock size={20} className="text-purple-600" />
-          </div>
-        </div>
+        {statuses.map((s) => {
+          const style = getStatusStyle(s.cor);
+          const iconBg = style.badge.split(" ")[0]; // ex: "bg-blue-50"
+          const count = tickets.filter((t) => t.status?.id === s.id).length;
+          return (
+            <div
+              key={s.id}
+              className="bg-white rounded-2xl border border-slate-200 p-5 flex items-start justify-between"
+            >
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500 mb-1 truncate">
+                  {s.nome}
+                </p>
+                <p className="text-2xl font-semibold text-slate-900">
+                  {count}
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  {s.contaComoResolvido ? "Concluídos" : "Em andamento"}
+                </p>
+              </div>
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}
+              >
+                <span className={`w-2.5 h-2.5 rounded-full ${style.dot}`} />
+              </div>
+            </div>
+          );
+        })}
 
         <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-start justify-between">
           <div>
@@ -1754,7 +2230,7 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
             </p>
             <p className="text-xs text-slate-400 mt-1">Precisam de atenção</p>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center shrink-0">
             <AlertCircle size={20} className="text-red-600" />
           </div>
         </div>
@@ -1762,14 +2238,16 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
         <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-start justify-between">
           <div>
             <p className="text-xs font-medium text-slate-500 mb-1">
-              Resolvidos na Semana
+              Concluídos na Semana
             </p>
             <p className="text-2xl font-semibold text-slate-900">
-              {resolvidosSemana}
+              {concluidosSemana}
             </p>
-            <p className="text-xs text-slate-400 mt-1">Últimos 7 dias</p>
+            <p className="text-xs text-slate-400 mt-1">
+              Desde segunda-feira
+            </p>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-teal-50 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl bg-teal-50 flex items-center justify-center shrink-0">
             <CheckCircle2 size={20} className="text-teal-600" />
           </div>
         </div>
@@ -1795,9 +2273,9 @@ function Dashboard({ tickets, users, onOpenTicket, onNewTicket }) {
           className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 focus-brand bg-white w-full sm:w-auto"
         >
           <option value="Todos">Todos os status</option>
-          {STATUS_OPTIONS.map((s) => (
-            <option key={s} value={s}>
-              {s}
+          {statuses.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.nome}
             </option>
           ))}
         </select>
@@ -1954,6 +2432,7 @@ export default function TicketSystem() {
   // --- Dados de negócio -------------------------------------------------
   const [users, setUsers] = useState([]);
   const [tickets, setTickets] = useState([]);
+  const [statuses, setStatuses] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [dataLoading, setDataLoading] = useState(true);
 
@@ -2001,12 +2480,33 @@ export default function TicketSystem() {
     if (!error) setUsers(data);
   }, []);
 
+  const fetchStatuses = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("ticket_statuses")
+      .select("id, nome, cor, ordem, sla_horas, is_default, conta_como_resolvido")
+      .order("ordem");
+    if (!error) {
+      setStatuses(
+        data.map((s) => ({
+          id: s.id,
+          nome: s.nome,
+          cor: s.cor,
+          ordem: s.ordem,
+          slaHoras: s.sla_horas,
+          isDefault: s.is_default,
+          contaComoResolvido: s.conta_como_resolvido,
+        }))
+      );
+    }
+  }, []);
+
   const fetchTickets = useCallback(async () => {
     const { data, error } = await supabase
       .from("tickets")
       .select(
         `
-        id, codigo, cnpj, codigo_ag, cliente, relato, data_abertura, status, criado_por, created_at,
+        id, codigo, cnpj, codigo_ag, cliente, relato, data_abertura, status_id, criado_por, created_at,
+        status:ticket_statuses ( id, nome, cor, sla_horas, conta_como_resolvido ),
         ticket_responsaveis ( profile_id ),
         ticket_comentarios ( id, texto, created_at, autor:profiles ( name ) ),
         ticket_status_history ( id, status_anterior, status_novo, changed_at, alterado_por:profiles ( name ) )
@@ -2050,6 +2550,7 @@ export default function TicketSystem() {
       setCurrentUser(profile ?? null);
       await Promise.all([
         fetchUsers(),
+        fetchStatuses(),
         fetchTickets(),
         fetchNotifications(session.user.id),
       ]);
@@ -2080,6 +2581,14 @@ export default function TicketSystem() {
       )
       .on(
         "postgres_changes",
+        { event: "*", schema: "public", table: "ticket_statuses" },
+        () => {
+          fetchStatuses();
+          fetchTickets();
+        }
+      )
+      .on(
+        "postgres_changes",
         { event: "*", schema: "public", table: "profiles" },
         fetchUsers
       )
@@ -2099,7 +2608,7 @@ export default function TicketSystem() {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [session, fetchUsers, fetchTickets, fetchNotifications]);
+  }, [session, fetchUsers, fetchStatuses, fetchTickets, fetchNotifications]);
 
   // -----------------------------------------------------------------------
   // 4) Ações que gravam no Supabase. As regras de permissão já são
@@ -2127,7 +2636,7 @@ export default function TicketSystem() {
         cliente: form.cliente,
         relato: form.relato,
         data_abertura: form.dataAbertura,
-        status: form.status,
+        status_id: form.statusId,
         criado_por: currentUser.id,
       })
       .select()
@@ -2148,10 +2657,10 @@ export default function TicketSystem() {
     setView("detail");
   };
 
-  const changeStatus = async (ticketId, status) => {
+  const changeStatus = async (ticketId, statusId) => {
     const { error } = await supabase
       .from("tickets")
-      .update({ status })
+      .update({ status_id: statusId })
       .eq("id", ticketId);
     if (error) throw error;
     // Não depende só do realtime: atualiza a tela de quem fez a ação na
@@ -2244,6 +2753,81 @@ export default function TicketSystem() {
     await fetchUsers();
   };
 
+  // ---- Status dos tickets -------------------------------------------------
+  // Regras de negócio (não excluir o único status, não excluir o padrão
+  // sem promover outro, não excluir status em uso) são garantidas no
+  // banco via triggers/FK — aqui só repassamos o erro pra tela.
+  const createStatus = async ({
+    nome,
+    cor,
+    slaHoras,
+    contaComoResolvido,
+    isDefault,
+  }) => {
+    const maxOrdem = statuses.reduce((max, s) => Math.max(max, s.ordem), -1);
+    const { error } = await supabase.from("ticket_statuses").insert({
+      nome,
+      cor,
+      sla_horas: slaHoras,
+      conta_como_resolvido: contaComoResolvido,
+      is_default: isDefault,
+      ordem: maxOrdem + 1,
+    });
+    if (error) throw error;
+    await fetchStatuses();
+  };
+
+  const updateStatus = async (
+    id,
+    { nome, cor, slaHoras, contaComoResolvido, isDefault }
+  ) => {
+    const { error } = await supabase
+      .from("ticket_statuses")
+      .update({
+        nome,
+        cor,
+        sla_horas: slaHoras,
+        conta_como_resolvido: contaComoResolvido,
+        is_default: isDefault,
+      })
+      .eq("id", id);
+    if (error) throw error;
+    await fetchStatuses();
+  };
+
+  const deleteStatus = async (id) => {
+    const { error } = await supabase
+      .from("ticket_statuses")
+      .delete()
+      .eq("id", id);
+    if (error) throw error;
+    await fetchStatuses();
+  };
+
+  const reorderStatus = async (id, direction) => {
+    const sorted = [...statuses].sort((a, b) => a.ordem - b.ordem);
+    const index = sorted.findIndex((s) => s.id === id);
+    const swapIndex = direction === "up" ? index - 1 : index + 1;
+    if (swapIndex < 0 || swapIndex >= sorted.length) return;
+
+    const a = sorted[index];
+    const b = sorted[swapIndex];
+
+    const { error: error1 } = await supabase
+      .from("ticket_statuses")
+      .update({ ordem: b.ordem })
+      .eq("id", a.id);
+    if (error1) throw error1;
+
+    const { error: error2 } = await supabase
+      .from("ticket_statuses")
+      .update({ ordem: a.ordem })
+      .eq("id", b.id);
+    if (error2) throw error2;
+
+    await fetchStatuses();
+  };
+
   // -----------------------------------------------------------------------
   // Renderização
   // -----------------------------------------------------------------------
@@ -2288,7 +2872,7 @@ export default function TicketSystem() {
           {/* Nav: fica na mesma linha em telas largas; no mobile, quebra
               para uma linha própria (order-3 + basis-full) para não
               disputar espaço com o bloco de ações à direita. */}
-          <nav className="order-3 basis-full sm:order-0 sm:basis-auto flex items-center gap-1 sm:ml-2 sm:pl-4 sm:border-l sm:border-slate-100">
+          <nav className="order-3 basis-full sm:order-none sm:basis-auto flex items-center gap-1 sm:ml-2 sm:pl-4 sm:border-l sm:border-slate-100">
             <button
               onClick={() => setView("dashboard")}
               className={`text-sm font-medium rounded-lg px-3 py-1.5 transition ${
@@ -2309,6 +2893,18 @@ export default function TicketSystem() {
                 }`}
               >
                 Equipe
+              </button>
+            )}
+            {currentUser.role === "gestor" && (
+              <button
+                onClick={() => setView("statuses")}
+                className={`text-sm font-medium rounded-lg px-3 py-1.5 transition ${
+                  view === "statuses"
+                    ? "bg-slate-100 text-slate-800"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                Status
               </button>
             )}
           </nav>
@@ -2362,6 +2958,7 @@ export default function TicketSystem() {
         <Dashboard
           tickets={tickets}
           users={users}
+          statuses={statuses}
           onOpenTicket={openTicket}
           onNewTicket={() => setShowNewTicket(true)}
         />
@@ -2371,6 +2968,7 @@ export default function TicketSystem() {
         <TicketDetail
           ticket={selectedTicket}
           users={users}
+          statuses={statuses}
           currentUser={currentUser}
           onBack={() => setView("dashboard")}
           onChangeStatus={changeStatus}
@@ -2379,10 +2977,11 @@ export default function TicketSystem() {
         />
       )}
 
-      {/* Defesa em profundidade: mesmo que "view" vire "team" por algum
-          motivo (ex: estado antigo em memória), só renderiza para gestor.
-          O servidor (RLS + Edge Function) já bloqueia de qualquer forma,
-          isso aqui é só para não mostrar a tela à toa. */}
+      {/* Defesa em profundidade: mesmo que "view" vire "team"/"statuses"
+          por algum motivo (ex: estado antigo em memória), só renderiza
+          para gestor. O servidor (RLS + Edge Function/triggers) já
+          bloqueia de qualquer forma, isso aqui é só para não mostrar a
+          tela à toa. */}
       {view === "team" && currentUser.role === "gestor" && (
         <TeamView
           users={users}
@@ -2392,11 +2991,23 @@ export default function TicketSystem() {
         />
       )}
 
+      {view === "statuses" && currentUser.role === "gestor" && (
+        <StatusManagerView
+          statuses={statuses}
+          tickets={tickets}
+          onCreate={createStatus}
+          onUpdate={updateStatus}
+          onDelete={deleteStatus}
+          onReorder={reorderStatus}
+        />
+      )}
+
       {showNewTicket && (
         <NewTicketModal
           onClose={() => setShowNewTicket(false)}
           onCreate={createTicket}
           currentUser={currentUser}
+          statuses={statuses}
         />
       )}
 

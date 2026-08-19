@@ -352,7 +352,7 @@ function NotificationBell({ notifications, onOpenTicket, onMarkAllRead }) {
       >
         <Bell size={18} />
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center leading-none">
+          <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center leading-none">
             {unreadCount > 9 ? "9+" : unreadCount}
           </span>
         )}
@@ -2872,7 +2872,7 @@ export default function TicketSystem() {
           {/* Nav: fica na mesma linha em telas largas; no mobile, quebra
               para uma linha própria (order-3 + basis-full) para não
               disputar espaço com o bloco de ações à direita. */}
-          <nav className="order-3 basis-full sm:order-none sm:basis-auto flex items-center gap-1 sm:ml-2 sm:pl-4 sm:border-l sm:border-slate-100">
+          <nav className="order-3 basis-full sm:order-0 sm:basis-auto flex items-center gap-1 sm:ml-2 sm:pl-4 sm:border-l sm:border-slate-100">
             <button
               onClick={() => setView("dashboard")}
               className={`text-sm font-medium rounded-lg px-3 py-1.5 transition ${

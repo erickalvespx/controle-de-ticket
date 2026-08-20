@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   Search,
@@ -29,6 +29,7 @@ import {
   ChevronUp,
   ChevronDown,
   Pencil,
+  Camera,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -316,6 +317,16 @@ function SlaBadge({ ticket }) {
 
 function Avatar({ member, size = "sm" }) {
   const dims = size === "sm" ? "w-7 h-7 text-[11px]" : "w-9 h-9 text-xs";
+  if (member.avatarUrl) {
+    return (
+      <img
+        src={member.avatarUrl}
+        alt={member.name}
+        title={member.name}
+        className={`${dims} rounded-full object-cover ring-2 ring-white shrink-0`}
+      />
+    );
+  }
   return (
     <div
       title={member.name}
@@ -323,6 +334,45 @@ function Avatar({ member, size = "sm" }) {
     >
       {member.initials}
     </div>
+  );
+}
+
+// Usado só na tela Equipe (que já é 100% restrita a gestor): clicar na
+// foto abre o seletor de arquivo do sistema operacional e envia a
+// imagem escolhida.
+function EditableAvatar({ member, onUpload, busy }) {
+  const inputRef = useRef(null);
+  return (
+    <button
+      type="button"
+      onClick={() => inputRef.current?.click()}
+      disabled={busy}
+      title="Alterar foto"
+      className="relative group shrink-0 rounded-full"
+    >
+      <Avatar member={member} size="md" />
+      <span className="absolute inset-0 rounded-full flex items-center justify-center bg-black/0 group-hover:bg-black/40 transition">
+        {busy ? (
+          <Loader2 size={14} className="text-white animate-spin" />
+        ) : (
+          <Camera
+            size={14}
+            className="text-white opacity-0 group-hover:opacity-100 transition"
+          />
+        )}
+      </span>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onUpload(file);
+          e.target.value = "";
+        }}
+      />
+    </button>
   );
 }
 
@@ -1518,7 +1568,13 @@ function TicketDetail({
 // (WhatsApp, Slack etc.) — a pessoa pode trocá-la depois em "Alterar
 // senha", no cabeçalho, assim que entrar.
 
-function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
+function TeamView({
+  users,
+  currentUser,
+  onChangeRole,
+  onResetPassword,
+  onUploadPhoto,
+}) {
   const [roleBusyId, setRoleBusyId] = useState(null);
   const [roleError, setRoleError] = useState("");
 
@@ -1527,6 +1583,9 @@ function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
   const [resetError, setResetError] = useState("");
   const [resetResult, setResetResult] = useState(null);
   const [copied, setCopied] = useState(false);
+
+  const [photoBusyId, setPhotoBusyId] = useState(null);
+  const [photoError, setPhotoError] = useState("");
 
   const handleRoleChange = async (userId, newRole) => {
     setRoleError("");
@@ -1562,12 +1621,32 @@ function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handlePhotoUpload = async (userId, file) => {
+    setPhotoError("");
+    if (!file.type.startsWith("image/")) {
+      setPhotoError("Selecione um arquivo de imagem.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setPhotoError("A imagem precisa ter no máximo 5MB.");
+      return;
+    }
+    setPhotoBusyId(userId);
+    try {
+      await onUploadPhoto(userId, file);
+    } catch (err) {
+      setPhotoError(err.message || "Não foi possível enviar a foto.");
+    } finally {
+      setPhotoBusyId(null);
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-slate-900">Equipe</h1>
         <p className="text-sm text-slate-500 mt-0.5">
-          Gerencie papéis de acesso e redefina senhas
+          Gerencie papéis de acesso, fotos e redefina senhas
         </p>
       </div>
 
@@ -1609,6 +1688,9 @@ function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
           <h2 className="text-sm font-semibold text-slate-800">
             Membros ({users.length})
           </h2>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Clique na foto de alguém para adicionar ou trocar
+          </p>
         </div>
         {roleError && (
           <p className="text-xs text-red-500 bg-red-50 border-b border-red-100 px-4 sm:px-6 py-2">
@@ -1620,6 +1702,11 @@ function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
             {resetError}
           </p>
         )}
+        {photoError && (
+          <p className="text-xs text-red-500 bg-red-50 border-b border-red-100 px-4 sm:px-6 py-2">
+            {photoError}
+          </p>
+        )}
         <div className="divide-y divide-slate-50">
           {users.map((u) => (
             <div
@@ -1627,7 +1714,11 @@ function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
               className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-3"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <Avatar member={u} size="md" />
+                <EditableAvatar
+                  member={u}
+                  busy={photoBusyId === u.id}
+                  onUpload={(file) => handlePhotoUpload(u.id, file)}
+                />
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-slate-800 truncate">
                     {u.name}
@@ -1678,15 +1769,24 @@ function TeamView({ users, currentUser, onChangeRole, onResetPassword }) {
                   </button>
                 )}
 
-                <select
-                  value={u.role}
-                  disabled={roleBusyId === u.id}
-                  onChange={(e) => handleRoleChange(u.id, e.target.value)}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium focus-brand bg-white disabled:opacity-50"
-                >
-                  <option value="tecnico">Técnico</option>
-                  <option value="gestor">Gestor</option>
-                </select>
+                {u.id === currentUser.id ? (
+                  <span
+                    title="Você não pode alterar o próprio papel — peça a outro gestor"
+                    className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-500"
+                  >
+                    {ROLE_LABEL[u.role]}
+                  </span>
+                ) : (
+                  <select
+                    value={u.role}
+                    disabled={roleBusyId === u.id}
+                    onChange={(e) => handleRoleChange(u.id, e.target.value)}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium focus-brand bg-white disabled:opacity-50"
+                  >
+                    <option value="tecnico">Técnico</option>
+                    <option value="gestor">Gestor</option>
+                  </select>
+                )}
               </div>
             </div>
           ))}
@@ -2475,9 +2575,20 @@ export default function TicketSystem() {
   const fetchUsers = useCallback(async () => {
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, name, initials, email, role")
+      .select("id, name, initials, email, role, avatar_url")
       .order("name");
-    if (!error) setUsers(data);
+    if (!error) {
+      setUsers(
+        data.map((u) => ({
+          id: u.id,
+          name: u.name,
+          initials: u.initials,
+          email: u.email,
+          role: u.role,
+          avatarUrl: u.avatar_url,
+        }))
+      );
+    }
   }, []);
 
   const fetchStatuses = useCallback(async () => {
@@ -2543,11 +2654,22 @@ export default function TicketSystem() {
       setDataLoading(true);
       const { data: profile } = await supabase
         .from("profiles")
-        .select("id, name, initials, email, role")
+        .select("id, name, initials, email, role, avatar_url")
         .eq("id", session.user.id)
         .single();
       if (cancelled) return;
-      setCurrentUser(profile ?? null);
+      setCurrentUser(
+        profile
+          ? {
+              id: profile.id,
+              name: profile.name,
+              initials: profile.initials,
+              email: profile.email,
+              role: profile.role,
+              avatarUrl: profile.avatar_url,
+            }
+          : null
+      );
       await Promise.all([
         fetchUsers(),
         fetchStatuses(),
@@ -2750,6 +2872,35 @@ export default function TicketSystem() {
       .update({ role: newRole })
       .eq("id", userId);
     if (error) throw error;
+    await fetchUsers();
+  };
+
+  // ---- Foto de perfil -----------------------------------------------------
+  // Só gestor consegue de verdade (RLS do bucket + trigger na tabela
+  // profiles bloqueiam qualquer outra pessoa, mesmo tentando alterar a
+  // própria foto). Aqui é só o upload em si.
+  const uploadUserPhoto = async (userId, file) => {
+    const ext = file.name.split(".").pop() || "jpg";
+    const path = `${userId}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("avatars")
+      .upload(path, file, { upsert: true, cacheControl: "3600" });
+    if (uploadError) throw uploadError;
+
+    const { data: urlData } = supabase.storage
+      .from("avatars")
+      .getPublicUrl(path);
+    // Sufixo pra "furar" cache do navegador/CDN quando a foto é trocada
+    // no mesmo caminho.
+    const avatarUrl = `${urlData.publicUrl}?v=${Date.now()}`;
+
+    const { error: updateError } = await supabase
+      .from("profiles")
+      .update({ avatar_url: avatarUrl })
+      .eq("id", userId);
+    if (updateError) throw updateError;
+
     await fetchUsers();
   };
 
@@ -2988,6 +3139,7 @@ export default function TicketSystem() {
           currentUser={currentUser}
           onChangeRole={changeUserRole}
           onResetPassword={resetUserPassword}
+          onUploadPhoto={uploadUserPhoto}
         />
       )}
 
